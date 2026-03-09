@@ -1,0 +1,17 @@
+{
+  "description": "Tuned baseline \u2014 known-good idle deviations",
+  "captured": "2026-03-08 17:54:21",
+  "sgbd": "D73N57C0",
+  "mods": "Malone Stage 2 (EGR/DPF/DEF/swirl delete)",
+  "conditions": {
+    "rpm": 2532.0,
+    "coolant_c": 55.8,
+    "samples": 5
+  },
+  "idle_air_deviation_pct": -9.8,
+  "idle_boost_deviation_pct": -17.8,
+  "thresholds": {
+    "air_mass_warn_pct": -17.8,
+    "air_mass_crit_pct": -24.8
+  }
+}

@@ -66,7 +66,7 @@ class Ediabas:
         self.api = ctypes.WinDLL(self.dll_path)
         self._setup_prototypes()
 
-        result = self.api.__apiInit(ctypes.byref(self.handle))
+        result = self._apiInit(ctypes.byref(self.handle))
         if not result:
             raise EdiabasError(-1, "apiInit failed - check EDIABAS installation")
 
@@ -75,7 +75,7 @@ class Ediabas:
     def disconnect(self):
         """Close the EDIABAS API connection."""
         if self._connected and self.api:
-            self.api.__apiEnd(self.handle)
+            self._apiEnd(self.handle)
             self._connected = False
 
     def __enter__(self):
@@ -86,75 +86,113 @@ class Ediabas:
         self.disconnect()
 
     def _setup_prototypes(self):
-        """Set up ctypes function prototypes for all EDIABAS API functions."""
+        """Set up ctypes function prototypes for all EDIABAS API functions.
+
+        Uses getattr() to access DLL exports like __apiInit by their literal
+        names, avoiding Python's double-underscore name mangling.
+        """
         a = self.api
 
-        a.__apiInit.argtypes = [ctypes.POINTER(ctypes.c_uint)]
-        a.__apiInit.restype = ctypes.c_int
+        fn = getattr(a, '__apiInit')
+        fn.argtypes = [ctypes.POINTER(ctypes.c_uint)]
+        fn.restype = ctypes.c_int
+        self._apiInit = fn
 
-        a.__apiEnd.argtypes = [ctypes.c_uint]
-        a.__apiEnd.restype = None
+        fn = getattr(a, '__apiEnd')
+        fn.argtypes = [ctypes.c_uint]
+        fn.restype = None
+        self._apiEnd = fn
 
-        a.__apiJob.argtypes = [ctypes.c_uint, ctypes.c_char_p, ctypes.c_char_p,
-                               ctypes.c_char_p, ctypes.c_char_p]
-        a.__apiJob.restype = None
+        fn = getattr(a, '__apiJob')
+        fn.argtypes = [ctypes.c_uint, ctypes.c_char_p, ctypes.c_char_p,
+                       ctypes.c_char_p, ctypes.c_char_p]
+        fn.restype = None
+        self._apiJob = fn
 
-        a.__apiState.argtypes = [ctypes.c_uint]
-        a.__apiState.restype = ctypes.c_int
+        fn = getattr(a, '__apiState')
+        fn.argtypes = [ctypes.c_uint]
+        fn.restype = ctypes.c_int
+        self._apiState = fn
 
-        a.__apiStateExt.argtypes = [ctypes.c_uint, ctypes.c_int]
-        a.__apiStateExt.restype = ctypes.c_int
+        fn = getattr(a, '__apiStateExt')
+        fn.argtypes = [ctypes.c_uint, ctypes.c_int]
+        fn.restype = ctypes.c_int
+        self._apiStateExt = fn
 
-        a.__apiResultSets.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_ushort)]
-        a.__apiResultSets.restype = ctypes.c_int
+        fn = getattr(a, '__apiResultSets')
+        fn.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_ushort)]
+        fn.restype = ctypes.c_int
+        self._apiResultSets = fn
 
-        a.__apiResultNumber.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_ushort),
-                                        ctypes.c_ushort]
-        a.__apiResultNumber.restype = ctypes.c_int
+        fn = getattr(a, '__apiResultNumber')
+        fn.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_ushort),
+                       ctypes.c_ushort]
+        fn.restype = ctypes.c_int
+        self._apiResultNumber = fn
 
-        a.__apiResultName.argtypes = [ctypes.c_uint, ctypes.c_char_p,
-                                      ctypes.c_ushort, ctypes.c_ushort]
-        a.__apiResultName.restype = ctypes.c_int
+        fn = getattr(a, '__apiResultName')
+        fn.argtypes = [ctypes.c_uint, ctypes.c_char_p,
+                       ctypes.c_ushort, ctypes.c_ushort]
+        fn.restype = ctypes.c_int
+        self._apiResultName = fn
 
-        a.__apiResultText.argtypes = [ctypes.c_uint, ctypes.c_char_p, ctypes.c_char_p,
-                                      ctypes.c_ushort, ctypes.c_char_p]
-        a.__apiResultText.restype = ctypes.c_int
+        fn = getattr(a, '__apiResultText')
+        fn.argtypes = [ctypes.c_uint, ctypes.c_char_p, ctypes.c_char_p,
+                       ctypes.c_ushort, ctypes.c_char_p]
+        fn.restype = ctypes.c_int
+        self._apiResultText = fn
 
-        a.__apiResultReal.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_double),
-                                      ctypes.c_char_p, ctypes.c_ushort]
-        a.__apiResultReal.restype = ctypes.c_int
+        fn = getattr(a, '__apiResultReal')
+        fn.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_double),
+                       ctypes.c_char_p, ctypes.c_ushort]
+        fn.restype = ctypes.c_int
+        self._apiResultReal = fn
 
-        a.__apiResultInt.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_short),
-                                     ctypes.c_char_p, ctypes.c_ushort]
-        a.__apiResultInt.restype = ctypes.c_int
+        fn = getattr(a, '__apiResultInt')
+        fn.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_short),
+                       ctypes.c_char_p, ctypes.c_ushort]
+        fn.restype = ctypes.c_int
+        self._apiResultInt = fn
 
-        a.__apiResultWord.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_ushort),
-                                      ctypes.c_char_p, ctypes.c_ushort]
-        a.__apiResultWord.restype = ctypes.c_int
+        fn = getattr(a, '__apiResultWord')
+        fn.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_ushort),
+                       ctypes.c_char_p, ctypes.c_ushort]
+        fn.restype = ctypes.c_int
+        self._apiResultWord = fn
 
-        a.__apiResultLong.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_long),
-                                      ctypes.c_char_p, ctypes.c_ushort]
-        a.__apiResultLong.restype = ctypes.c_int
+        fn = getattr(a, '__apiResultLong')
+        fn.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_long),
+                       ctypes.c_char_p, ctypes.c_ushort]
+        fn.restype = ctypes.c_int
+        self._apiResultLong = fn
 
-        a.__apiResultDWord.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_ulong),
-                                       ctypes.c_char_p, ctypes.c_ushort]
-        a.__apiResultDWord.restype = ctypes.c_int
+        fn = getattr(a, '__apiResultDWord')
+        fn.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_ulong),
+                       ctypes.c_char_p, ctypes.c_ushort]
+        fn.restype = ctypes.c_int
+        self._apiResultDWord = fn
 
-        a.__apiResultFormat.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_int),
-                                        ctypes.c_char_p, ctypes.c_ushort]
-        a.__apiResultFormat.restype = ctypes.c_int
+        fn = getattr(a, '__apiResultFormat')
+        fn.argtypes = [ctypes.c_uint, ctypes.POINTER(ctypes.c_int),
+                       ctypes.c_char_p, ctypes.c_ushort]
+        fn.restype = ctypes.c_int
+        self._apiResultFormat = fn
 
-        a.__apiErrorCode.argtypes = [ctypes.c_uint]
-        a.__apiErrorCode.restype = ctypes.c_int
+        fn = getattr(a, '__apiErrorCode')
+        fn.argtypes = [ctypes.c_uint]
+        fn.restype = ctypes.c_int
+        self._apiErrorCode = fn
 
-        a.__apiErrorText.argtypes = [ctypes.c_uint, ctypes.c_char_p, ctypes.c_int]
-        a.__apiErrorText.restype = None
+        fn = getattr(a, '__apiErrorText')
+        fn.argtypes = [ctypes.c_uint, ctypes.c_char_p, ctypes.c_int]
+        fn.restype = None
+        self._apiErrorText = fn
 
     def get_error(self):
         """Get the current error code and text."""
-        code = self.api.__apiErrorCode(self.handle)
+        code = self._apiErrorCode(self.handle)
         buf = ctypes.create_string_buffer(256)
-        self.api.__apiErrorText(self.handle, buf, 256)
+        self._apiErrorText(self.handle, buf, 256)
         return code, buf.value.decode('latin-1', errors='replace')
 
     def run_job(self, sgbd, job, params="", result_filter="", timeout_ms=10000):
@@ -164,13 +202,13 @@ class Ediabas:
         Each dict maps result_name -> value (auto-typed).
         Raises EdiabasError on failure.
         """
-        self.api.__apiJob(self.handle, sgbd.encode(), job.encode(),
-                          params.encode(), result_filter.encode())
+        self._apiJob(self.handle, sgbd.encode(), job.encode(),
+                     params.encode(), result_filter.encode())
 
         max_polls = timeout_ms // 100
         state = APIBUSY
         for _ in range(max_polls):
-            state = self.api.__apiStateExt(self.handle, 100)
+            state = self._apiStateExt(self.handle, 100)
             if state != APIBUSY:
                 break
 
@@ -186,17 +224,17 @@ class Ediabas:
     def _read_results(self):
         """Read all result sets from the last completed job."""
         sets = ctypes.c_ushort(0)
-        self.api.__apiResultSets(self.handle, ctypes.byref(sets))
+        self._apiResultSets(self.handle, ctypes.byref(sets))
 
         result_sets = []
         for s in range(sets.value + 1):
             num = ctypes.c_ushort(0)
-            self.api.__apiResultNumber(self.handle, ctypes.byref(num), s)
+            self._apiResultNumber(self.handle, ctypes.byref(num), s)
 
             result = {}
             for i in range(num.value):
                 name_buf = ctypes.create_string_buffer(64)
-                if not self.api.__apiResultName(self.handle, name_buf, i, s):
+                if not self._apiResultName(self.handle, name_buf, i, s):
                     continue
 
                 name = name_buf.value.decode('latin-1', errors='replace')
@@ -214,36 +252,42 @@ class Ediabas:
     def _read_result_value(self, name_bytes, result_set):
         """Read a single result value, auto-detecting the format."""
         fmt = ctypes.c_int(-1)
-        self.api.__apiResultFormat(self.handle, ctypes.byref(fmt), name_bytes, result_set)
+        self._apiResultFormat(self.handle, ctypes.byref(fmt), name_bytes, result_set)
 
-        if fmt.value == APIFORMAT_REAL:
+        if fmt.value in (APIFORMAT_CHAR, APIFORMAT_BYTE):
+            buf = ctypes.create_string_buffer(1024)
+            if self._apiResultText(self.handle, buf, name_bytes, result_set, b""):
+                return buf.value.decode('latin-1', errors='replace')
+            return None
+
+        elif fmt.value == APIFORMAT_REAL:
             v = ctypes.c_double(0)
-            self.api.__apiResultReal(self.handle, ctypes.byref(v), name_bytes, result_set)
+            self._apiResultReal(self.handle, ctypes.byref(v), name_bytes, result_set)
             return v.value
 
         elif fmt.value == APIFORMAT_INTEGER:
             v = ctypes.c_short(0)
-            self.api.__apiResultInt(self.handle, ctypes.byref(v), name_bytes, result_set)
+            self._apiResultInt(self.handle, ctypes.byref(v), name_bytes, result_set)
             return v.value
 
         elif fmt.value == APIFORMAT_WORD:
             v = ctypes.c_ushort(0)
-            self.api.__apiResultWord(self.handle, ctypes.byref(v), name_bytes, result_set)
+            self._apiResultWord(self.handle, ctypes.byref(v), name_bytes, result_set)
             return v.value
 
         elif fmt.value == APIFORMAT_LONG:
             v = ctypes.c_long(0)
-            self.api.__apiResultLong(self.handle, ctypes.byref(v), name_bytes, result_set)
+            self._apiResultLong(self.handle, ctypes.byref(v), name_bytes, result_set)
             return v.value
 
         elif fmt.value == APIFORMAT_DWORD:
             v = ctypes.c_ulong(0)
-            self.api.__apiResultDWord(self.handle, ctypes.byref(v), name_bytes, result_set)
+            self._apiResultDWord(self.handle, ctypes.byref(v), name_bytes, result_set)
             return v.value
 
         elif fmt.value == APIFORMAT_TEXT:
             buf = ctypes.create_string_buffer(1024)
-            self.api.__apiResultText(self.handle, buf, name_bytes, result_set, b"")
+            self._apiResultText(self.handle, buf, name_bytes, result_set, b"")
             return buf.value.decode('latin-1', errors='replace')
 
         elif fmt.value == APIFORMAT_BINARY:
@@ -252,7 +296,7 @@ class Ediabas:
         else:
             # Fallback: try text
             buf = ctypes.create_string_buffer(1024)
-            if self.api.__apiResultText(self.handle, buf, name_bytes, result_set, b""):
+            if self._apiResultText(self.handle, buf, name_bytes, result_set, b""):
                 return buf.value.decode('latin-1', errors='replace')
             return None
 
@@ -262,34 +306,34 @@ class Ediabas:
         Convenience method for reading sensor values.
         Returns the value or None if not found.
         """
-        self.api.__apiJob(self.handle, sgbd.encode(), job.encode(),
-                          params.encode(), b"")
+        self._apiJob(self.handle, sgbd.encode(), job.encode(),
+                     params.encode(), b"")
         for _ in range(100):
-            if self.api.__apiStateExt(self.handle, 100) != APIBUSY:
+            if self._apiStateExt(self.handle, 100) != APIBUSY:
                 break
 
         # Try REAL first (most sensor values)
         v = ctypes.c_double(0)
-        if self.api.__apiResultReal(self.handle, ctypes.byref(v),
-                                    result_name.encode(), result_set):
+        if self._apiResultReal(self.handle, ctypes.byref(v),
+                               result_name.encode(), result_set):
             return v.value
 
         # Try WORD
         wv = ctypes.c_ushort(0)
-        if self.api.__apiResultWord(self.handle, ctypes.byref(wv),
-                                    result_name.encode(), result_set):
+        if self._apiResultWord(self.handle, ctypes.byref(wv),
+                               result_name.encode(), result_set):
             return float(wv.value)
 
         # Try LONG
         lv = ctypes.c_long(0)
-        if self.api.__apiResultLong(self.handle, ctypes.byref(lv),
-                                    result_name.encode(), result_set):
+        if self._apiResultLong(self.handle, ctypes.byref(lv),
+                               result_name.encode(), result_set):
             return float(lv.value)
 
         # Try TEXT
         tb = ctypes.create_string_buffer(256)
-        if self.api.__apiResultText(self.handle, tb, result_name.encode(),
-                                    result_set, b""):
+        if self._apiResultText(self.handle, tb, result_name.encode(),
+                               result_set, b""):
             text = tb.value.decode('latin-1', errors='replace')
             try:
                 return float(text)
@@ -298,13 +342,77 @@ class Ediabas:
 
         return None
 
+    def read_results(self, sgbd, job, result_names, params="", result_set=1,
+                      timeout_ms=10000):
+        """Run a job and read multiple named results in one call.
+
+        More efficient than calling read_value() multiple times when all
+        results come from the same job. Returns dict of {name: value}.
+        """
+        self._apiJob(self.handle, sgbd.encode(), job.encode(),
+                     params.encode(), b"")
+
+        max_polls = timeout_ms // 100
+        state = APIBUSY
+        for _ in range(max_polls):
+            state = self._apiStateExt(self.handle, 100)
+            if state != APIBUSY:
+                break
+
+        if state == APIERROR:
+            code, text = self.get_error()
+            raise EdiabasError(code, text)
+
+        if state != APIREADY:
+            raise EdiabasError(-2, f"Job timed out (state={state})")
+
+        results = {}
+        for name in result_names:
+            name_b = name.encode()
+            # Try REAL first (most sensor values)
+            v = ctypes.c_double(0)
+            if self._apiResultReal(self.handle, ctypes.byref(v),
+                                   name_b, result_set):
+                results[name] = v.value
+                continue
+            # Try TEXT
+            buf = ctypes.create_string_buffer(1024)
+            if self._apiResultText(self.handle, buf, name_b,
+                                   result_set, b""):
+                results[name] = buf.value.decode('latin-1', errors='replace')
+                continue
+            # Try WORD
+            wv = ctypes.c_ushort(0)
+            if self._apiResultWord(self.handle, ctypes.byref(wv),
+                                   name_b, result_set):
+                results[name] = float(wv.value)
+                continue
+            # Try LONG
+            lv = ctypes.c_long(0)
+            if self._apiResultLong(self.handle, ctypes.byref(lv),
+                                   name_b, result_set):
+                results[name] = float(lv.value)
+                continue
+            results[name] = None
+
+        return results
+
     def list_jobs(self, sgbd):
         """List all available jobs for a given SGBD."""
-        results = self.run_job(sgbd, "_JOBS")
+        self._apiJob(self.handle, sgbd.encode(), b"_JOBS", b"", b"")
+
+        for _ in range(100):
+            if self._apiStateExt(self.handle, 100) != APIBUSY:
+                break
+
+        sets = ctypes.c_ushort(0)
+        self._apiResultSets(self.handle, ctypes.byref(sets))
+
         jobs = []
-        for r in results[1:]:  # skip set 0 (system)
-            if "JOBNAME" in r:
-                jobs.append(r["JOBNAME"])
+        for s in range(1, sets.value + 1):
+            buf = ctypes.create_string_buffer(1024)
+            if self._apiResultText(self.handle, buf, b"JOBNAME", s, b""):
+                jobs.append(buf.value.decode('latin-1', errors='replace'))
         return sorted(jobs)
 
     def identify(self, sgbd):

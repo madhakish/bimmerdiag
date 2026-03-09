@@ -2,45 +2,131 @@
 
 Python CLI tools for BMW ECU diagnostics via EDIABAS and K+DCAN cable.
 
-Talk to your BMW's engine ECU from the command line. Read live sensor data,
-fault codes, injector health, and ECU configuration without needing INPA's
-GUI or reading German.
+Talk to your BMW's engine ECU from the command line. A terminal-based
+alternative to INPA/ISTA — reads live data, interprets values, and tells
+you what they mean. In English.
 
 ## What it does
 
 ```
-$ python bin/diag.py --sensors
+$ python bin/diag.py --health
 
-  Engine RPM                      697.50 rpm
-  Battery Voltage                 14.94 V
-  Coolant Temp                    58.00 degC
-  Engine/Oil Temp                 58.86 degC
-  Boost Actual                    1002 hPa (0.99 bar)
-  MAF Mass                        21.94 kg/h
-  Rail Pressure Actual            311.47 bar
-  Odometer                        320,876 km (199,376 mi)
+  bimmerdiag — BMW ECU Diagnostic Tool
+  SGBD: D73N57B0
+
+  ================================================================
+    SYSTEM HEALTH CHECK
+  ================================================================
+
+  [OK]   Engine         697 rpm — running
+  [OK]   Battery        14.94V
+  [!!]   Cooling        58°C — not at operating temp
+  [OK]   Oil            59°C, level 85%
+  [OK]   Turbo          1002 hPa (idle)
+  [!!]   Air Mass       -13% from target
+  [OK]   Fuel System    Rail: 311 bar
+  [OK]   Injectors      Mean: 1.8 rpm (smooth)
+  [!!]   Fault Codes    6 DTC(s) stored
+
+  ATTENTION NEEDED — 3 issue(s):
+    - Coolant cold (58°C)
+    - Air mass -13% below target
+    - 6 fault code(s)
 ```
 
 ```
-$ python bin/diag.py --faults
+$ python bin/diag.py --injectors
 
-  [1] Code 18853
-      Location: 49A5 LIN Bus, Kommunikation
-      Symptom:  keine Botschaften von Glühsteuergerät GSG empfangen
+  INJECTOR DIAGNOSTICS
+  ================================================================
 
-  [2] Code 16165
-      Location: 3F25 Ladeluftschlauch-Überwachung
-      Symptom:  Ladeluftschlauch abgefallen
+  Idle Roughness — RPM Deviation
+    Good: < 3 rpm | Marginal: 3-8 rpm | Bad: > 8 rpm
+
+    Cylinder 1: +1.23 rpm    [OK]
+    Cylinder 2: -0.87 rpm    [OK]
+    Cylinder 3: +4.56 rpm    [WARN] elevated
+    Cylinder 4: -1.02 rpm    [OK]
+    Cylinder 5: +2.34 rpm    [OK]
+    Cylinder 6: -0.91 rpm    [OK]
+
+  Per-Cylinder Assessment
+    Cylinder 3: MARGINAL — monitor closely
+    All others: GOOD — stable idle, minimal correction
 ```
 
 ```
-$ python bin/diag.py --monitor 60
+$ python bin/diag.py --turbo
 
- Time       RPM    Cool     Oil   Boost      MAF    Rail
-    0s      697   58.0C   58.8C  1002hPa  21.9kg/h   311bar
-    2s      704   58.0C   58.8C  1005hPa  22.1kg/h   312bar
-    4s     1914   60.0C   60.3C  1139hPa  62.6kg/h   371bar
+  TURBO / BOOST SYSTEM
+  ================================================================
+
+  Boost Pressure
+    Actual:      1002 hPa (0.99 bar)
+    Target:      1013 hPa (1.00 bar)
+    Deviation:   -11 (-1.1%)
+    Barometric:  997 hPa
+    Relative:    +5 hPa above ambient (no boost at idle — normal)
+
+  Air Mass Flow
+    MAF sensor:  21.9 kg/h
+    Deviation:   -49.6 mg (-12.7%)
+    Air mass > 15% below target — check for:
+      - Boost leaks (charge air hose, intercooler)
+      - MAF sensor fouling or failure
+      - Air filter restriction / box seal leaks
 ```
+
+## Live Dashboard
+
+```bash
+python bin/dashboard.py
+```
+
+Full-screen, auto-refreshing visual dashboard with:
+- Multi-zone RPM tachometer (green → yellow → red)
+- Color-coded temperature gauges (cyan/cold → green/normal → yellow → red/hot)
+- Boost actual vs target with deviation percentage
+- Rail pressure gauge with target comparison
+- Per-cylinder roughness bars with OK/WARN/FAIL status
+- Fault code display
+- Trend arrows, poll timing, cycle counter
+
+Updates every ~1-2 seconds. Ctrl+C to exit. Requires `pip install rich`.
+
+## CLI Commands
+
+### Diagnostics
+| Command | Description |
+|---------|-------------|
+| `--health` | Quick all-systems dashboard (OK/WARN/CRIT) |
+| `--sensors` | All sensor values, grouped by system |
+| `--faults` | Fault codes with English translation + shadow faults |
+| `--injectors` | Deep injector analysis (IMA, roughness, fuel correction, offsets, per-cylinder assessment) |
+| `--turbo` | Boost actual vs target, MAF, intercooler temps |
+| `--cooling` | Coolant/oil temps, thermostat quick check |
+| `--fuel` | Rail pressure actual vs target, fuel temp |
+| `--exhaust` | Exhaust temps, DPF status |
+| `--service` | CBS data, oil level, engine hours, odometer |
+| `--config` | ECU component config (what's coded on/off) |
+
+### Actions
+| Command | Description |
+|---------|-------------|
+| `--monitor [SECS]` | Continuous monitoring with trend arrows (default 60s) |
+| `--monitor 300 --csv log.csv` | Monitor with CSV export |
+| `--clear-faults` | Clear all fault codes (with confirmation) |
+| `--jobs` | List all 225 available ECU jobs |
+| `--job JOB [PARAMS]` | Run any specific EDIABAS job |
+
+### Options
+| Option | Description |
+|--------|-------------|
+| `--sgbd SGBD` | Override SGBD (default: auto-detect via D_MOTOR) |
+| `--csv FILE` | Export monitor data to CSV |
+
+Running with no arguments gives a full report (identify + health + sensors +
+injectors + faults + config).
 
 ## Requirements
 
@@ -61,14 +147,23 @@ $ python bin/diag.py --monitor 60
 ```bash
 cd bimmerdiag
 python bin/diag.py              # Full report
-python bin/diag.py --sensors    # Live sensor data
-python bin/diag.py --faults     # Fault codes
-python bin/diag.py --injectors  # Injector health
-python bin/diag.py --config     # ECU component config
+python bin/diag.py --health     # Quick system check
+python bin/diag.py --injectors  # Injector deep-dive
+python bin/diag.py --turbo      # Boost analysis
 python bin/diag.py --monitor 60 # Monitor for 60 seconds
-python bin/diag.py --jobs       # List all 225 available ECU jobs
-python bin/diag.py --job FS_LESEN  # Run any specific job
 ```
+
+## What makes this better than INPA
+
+- **English** — fault codes, ECU config, and diagnostic text translated
+- **Interpretation** — doesn't just show numbers, tells you what they mean
+- **Color-coded** — green/yellow/red status at a glance
+- **Health dashboard** — one command to check all systems
+- **Per-cylinder analysis** — injector health with thresholds and assessment
+- **Actual vs target** — boost, rail pressure, air mass shown as deviations
+- **Trend arrows** — monitor mode shows direction of change
+- **CSV export** — log data for later analysis
+- **No GUI needed** — runs in any terminal over SSH if needed
 
 ## Tested On
 
@@ -94,7 +189,8 @@ happens in the 32-bit layer.
 ```
 bin/
   ediabas.py     - Python wrapper for EDIABAS API (api64.dll)
-  diag.py        - CLI diagnostic tool
+  diag.py        - CLI diagnostic tool (reports, analysis, monitoring)
+  dashboard.py   - Live visual dashboard (requires: pip install rich)
 config/
   obd.ini        - Reference OBD.INI config (copy to C:\Windows\OBD.INI)
 docs/
