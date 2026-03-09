@@ -1198,6 +1198,134 @@ def cmd_record(ecu, sgbd, duration, csv_file=None):
     print()
 
 
+def cmd_cylinder_test(ecu, sgbd):
+    """Cylinder contribution test — cuts each injector and measures RPM drop.
+
+    Disables each injector one at a time via STEUERN_EV_x, measures the
+    resulting RPM drop, then restores normal operation. A healthy cylinder
+    causes a big RPM drop when cut. A misfiring cylinder barely changes RPM.
+    """
+    print_header("CYLINDER CONTRIBUTION TEST — M62 V8")
+    print(f"  {YELLOW}This test will cut each injector one at a time.{RESET}")
+    print(f"  {DIM}Engine must be running at idle. Keep hands clear.{RESET}")
+    print(f"  {DIM}Each cylinder is disabled for ~3 seconds.{RESET}\n")
+
+    confirm = input(f"  Run cylinder contribution test? (y/N): ").strip().lower()
+    if confirm != "y":
+        print(f"  {DIM}Cancelled.{RESET}")
+        return
+
+    # Get baseline RPM (average of 3 readings)
+    print(f"\n  {DIM}Reading baseline RPM...{RESET}")
+    baseline_rpms = []
+    for _ in range(3):
+        rpm = read_sensor(ecu, sgbd, "STATUS_MOTORDREHZAHL",
+                          "STAT_MOTORDREHZAHL_WERT")
+        if rpm is not None:
+            baseline_rpms.append(rpm)
+        time.sleep(0.5)
+
+    if not baseline_rpms:
+        print(f"  {RED}Cannot read RPM — engine running?{RESET}")
+        return
+
+    baseline = sum(baseline_rpms) / len(baseline_rpms)
+    print(f"  Baseline RPM: {BOLD}{baseline:.0f}{RESET}\n")
+
+    results = {}
+
+    for cyl in range(1, NUM_CYLINDERS + 1):
+        bank = "B1" if cyl <= 4 else "B2"
+        print(f"  Cyl {cyl} ({bank}): ", end="", flush=True)
+
+        # Cut this injector
+        try:
+            ecu.run_job(sgbd, f"STEUERN_EV_{cyl}", "0", timeout_ms=5000)
+        except EdiabasError:
+            pass  # actuator commands may not return clean status
+
+        # Wait for RPM to settle, then sample
+        time.sleep(1.5)
+        cut_rpms = []
+        for _ in range(3):
+            rpm = read_sensor(ecu, sgbd, "STATUS_MOTORDREHZAHL",
+                              "STAT_MOTORDREHZAHL_WERT")
+            if rpm is not None:
+                cut_rpms.append(rpm)
+            time.sleep(0.3)
+
+        # Restore normal operation
+        try:
+            ecu.run_job(sgbd, "DIAGNOSE_ENDE", timeout_ms=5000)
+        except EdiabasError:
+            pass
+
+        if cut_rpms:
+            cut_avg = sum(cut_rpms) / len(cut_rpms)
+            drop = baseline - cut_avg
+            results[cyl] = drop
+
+            # Bigger drop = cylinder was contributing more = healthier
+            if drop > 40:
+                color = GREEN
+                status = "GOOD"
+            elif drop > 15:
+                color = YELLOW
+                status = "WEAK"
+            else:
+                color = RED
+                status = "DEAD"
+
+            bar_len = int(max(0, drop) / max(baseline * 0.15, 1) * 30)
+            bar = "#" * min(bar_len, 30)
+            print(f"{color}{bar:30s} drop: {drop:+.0f} rpm  [{status}]{RESET}")
+        else:
+            print(f"{DIM}(no RPM data){RESET}")
+            results[cyl] = None
+
+        # Wait for engine to stabilize before next cylinder
+        time.sleep(2)
+
+    # Re-read baseline after test
+    print(f"\n  {DIM}Restoring normal operation...{RESET}")
+    try:
+        ecu.run_job(sgbd, "DIAGNOSE_ENDE", timeout_ms=5000)
+    except EdiabasError:
+        pass
+
+    # Summary
+    print_subheader("Contribution Summary")
+    bank1_drops = [results[c] for c in range(1, 5) if results.get(c) is not None]
+    bank2_drops = [results[c] for c in range(5, 9) if results.get(c) is not None]
+
+    if bank1_drops:
+        avg1 = sum(bank1_drops) / len(bank1_drops)
+        print(f"    Bank 1 (Cyl 1-4) avg drop: {avg1:.0f} rpm")
+    if bank2_drops:
+        avg2 = sum(bank2_drops) / len(bank2_drops)
+        print(f"    Bank 2 (Cyl 5-8) avg drop: {avg2:.0f} rpm")
+
+    # Find weakest cylinders
+    valid = {c: d for c, d in results.items() if d is not None}
+    if valid:
+        weakest = sorted(valid.items(), key=lambda x: x[1])
+        strongest = sorted(valid.items(), key=lambda x: x[1], reverse=True)
+        print(f"\n    Weakest:   Cyl {weakest[0][0]} (drop: {weakest[0][1]:+.0f} rpm)")
+        print(f"    Strongest: Cyl {strongest[0][0]} (drop: {strongest[0][1]:+.0f} rpm)")
+
+        # Diagnosis
+        avg_all = sum(valid.values()) / len(valid)
+        weak_cyls = [c for c, d in valid.items() if d < avg_all * 0.5]
+        if weak_cyls:
+            weak_str = ", ".join(f"Cyl {c}" for c in weak_cyls)
+            print(f"\n    {YELLOW}Low contribution: {weak_str}{RESET}")
+            print(f"    {DIM}These cylinders are contributing less than expected.{RESET}")
+            print(f"    {DIM}Possible causes: injector clog, injector wiring, compression,{RESET}")
+            print(f"    {DIM}or valve stem seal oil fouling.{RESET}")
+        else:
+            print(f"\n    {GREEN}All cylinders contributing reasonably.{RESET}")
+
+
 def cmd_reset_adapt(ecu, sgbd):
     """Reset DME adaptations (ADAPT_LOESCHEN)."""
     print_header("RESET DME ADAPTATIONS")
@@ -1281,6 +1409,7 @@ def main():
     parser.add_argument("--faults", action="store_true")
     parser.add_argument("--monitor", nargs="?", const=60, type=int, metavar="SECS")
     parser.add_argument("--record", nargs="?", const=120, type=int, metavar="SECS")
+    parser.add_argument("--cylinder-test", action="store_true")
     parser.add_argument("--clear-faults", action="store_true")
     parser.add_argument("--reset-adapt", action="store_true")
     parser.add_argument("--jobs", action="store_true")
@@ -1290,7 +1419,7 @@ def main():
 
     specific = any([args.health, args.idle, args.trims, args.lambda_, args.roughness,
                      args.sensors, args.faults, args.monitor is not None,
-                     args.record is not None,
+                     args.record is not None, args.cylinder_test,
                      args.clear_faults, args.reset_adapt, args.jobs, args.job])
     full_report = not specific
 
@@ -1325,6 +1454,10 @@ def main():
             job_name = args.job[0]
             params = args.job[1] if len(args.job) > 1 else ""
             cmd_run_job(ecu, sgbd, job_name, params)
+            return
+
+        if args.cylinder_test:
+            cmd_cylinder_test(ecu, sgbd)
             return
 
         if args.clear_faults:
