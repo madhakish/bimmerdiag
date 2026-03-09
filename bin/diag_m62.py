@@ -937,6 +937,267 @@ def cmd_roughness(ecu, sgbd):
             print(f"\n    {GREEN}Banks are reasonably balanced.{RESET}")
 
 
+def cmd_record(ecu, sgbd, duration, csv_file=None):
+    """High-frequency recording session for diagnosing subtle stumbles.
+
+    Polls as fast as the ECU responds (no sleep between samples).
+    Auto-saves CSV with timestamped filename. Runs statistical analysis
+    at the end to identify RPM dips, integrator swings, and O2 anomalies.
+    """
+    import statistics
+    from datetime import datetime
+
+    # Auto-generate CSV filename if not provided
+    if not csv_file:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_file = f"record_{ts}.csv"
+
+    print_header(f"RECORDING SESSION — M62 ({duration}s)")
+    print(f"  {DIM}Polling as fast as ECU responds — no sleep between samples.{RESET}")
+    print(f"  {DIM}CSV: {csv_file}{RESET}")
+    print(f"  {DIM}Ctrl+C to stop early.{RESET}\n")
+
+    # Channels to record — ordered by diagnostic priority
+    # Each read_value() is a separate EDIABAS job (~100-200ms each)
+    channels = [
+        ("STATUS_MOTORDREHZAHL", "STAT_MOTORDREHZAHL_WERT", "RPM", "rpm"),
+        ("STATUS_LL_REGLER", "STATUS_LL_REGLER_WERT", "ICV", "%"),
+        ("STATUS_LAMBDA_INTEGRATOR_1", "STAT_LAMBDA_INTEGRATOR_1_WERT", "IntB1", "%"),
+        ("STATUS_LAMBDA_INTEGRATOR_2", "STAT_LAMBDA_INTEGRATOR_2_WERT", "IntB2", "%"),
+        ("STATUS_L_SONDE", "STATUS_L_SONDE_WERT", "O2_B1", "V"),
+        ("STATUS_L_SONDE_2", "STATUS_L_SONDE_2_WERT", "O2_B2", "V"),
+        ("STATUS_LAMBDA_ADD_1", "STAT_LAMBDA_ADD_1_WERT", "AddB1", "%"),
+        ("STATUS_LAMBDA_ADD_2", "STAT_LAMBDA_ADD_2_WERT", "AddB2", "%"),
+        ("STATUS_LAST", "STAT_LAST_WERT", "Load", "ms"),
+        ("STATUS_ZUENDWINKEL", "STAT_ZUENDWINKEL_WERT", "Timing", "deg"),
+    ]
+
+    labels = [ch[2] for ch in channels]
+
+    # Print header
+    hdr = f"  {'Time':>6s} {'dt':>5s}"
+    for lbl in labels:
+        hdr += f" {lbl:>7s}"
+    print(hdr)
+    print(f"  {'-' * (13 + 8 * len(labels))}")
+
+    # Storage for all samples
+    all_samples = []  # list of dicts
+    all_times = []
+
+    csv_fh = open(csv_file, "w", newline="")
+    csv_writer = csv.writer(csv_fh)
+    csv_writer.writerow(["time_s", "dt_ms"] + labels)
+
+    sample_count = 0
+    try:
+        start = time.time()
+        prev_time = start
+        while time.time() - start < duration:
+            t_now = time.time()
+            elapsed = t_now - start
+            dt_ms = (t_now - prev_time) * 1000
+            prev_time = t_now
+
+            row = {}
+            line = f"  {elapsed:6.1f} {dt_ms:5.0f}"
+            csv_row = [f"{elapsed:.2f}", f"{dt_ms:.0f}"]
+
+            for job, wert, label, unit in channels:
+                val = read_sensor(ecu, sgbd, job, wert)
+                row[label] = val
+
+                if val is not None:
+                    if label == "RPM":
+                        line += f" {val:7.0f}"
+                    elif label in ("O2_B1", "O2_B2"):
+                        line += f" {val:7.3f}"
+                    elif label in ("Load", "Timing"):
+                        line += f" {val:7.1f}"
+                    else:
+                        line += f" {val:+7.1f}"
+                    csv_row.append(f"{val:.3f}")
+                else:
+                    line += f" {'n/a':>7s}"
+                    csv_row.append("")
+
+            print(line)
+            csv_writer.writerow(csv_row)
+            all_samples.append(row)
+            all_times.append(elapsed)
+            sample_count += 1
+
+    except KeyboardInterrupt:
+        print(f"\n  {DIM}Stopped by user.{RESET}")
+    finally:
+        csv_fh.close()
+
+    total_time = time.time() - start if sample_count > 0 else 0
+
+    # --- Statistical Analysis ---
+    print(f"\n{'=' * 72}")
+    print(f"  {BOLD}RECORDING SUMMARY{RESET}")
+    print(f"  {sample_count} samples in {total_time:.1f}s "
+          f"(avg {total_time/sample_count*1000:.0f}ms/sample, "
+          f"{sample_count/total_time:.1f} samples/sec)" if sample_count > 0 else "")
+    print(f"  CSV saved: {BOLD}{csv_file}{RESET}")
+    print(f"{'=' * 72}")
+
+    if sample_count < 5:
+        print(f"  {YELLOW}Not enough samples for analysis.{RESET}")
+        return
+
+    # Per-channel statistics
+    print(f"\n  {BOLD}Channel Statistics:{RESET}\n")
+    print(f"  {'Channel':>8s} {'Min':>8s} {'Max':>8s} {'Mean':>8s} {'StdDev':>8s} {'Range':>8s}")
+    print(f"  {'-' * 50}")
+
+    channel_data = {}
+    for label in labels:
+        vals = [s[label] for s in all_samples if s[label] is not None]
+        channel_data[label] = vals
+        if len(vals) < 2:
+            print(f"  {label:>8s}  {'(insufficient data)':>40s}")
+            continue
+        mn, mx = min(vals), max(vals)
+        avg = statistics.mean(vals)
+        sd = statistics.stdev(vals)
+        rng = mx - mn
+        print(f"  {label:>8s} {mn:8.1f} {mx:8.1f} {avg:8.1f} {sd:8.2f} {rng:8.1f}")
+
+    # --- RPM Stability Analysis ---
+    rpm_vals = channel_data.get("RPM", [])
+    if len(rpm_vals) >= 10:
+        rpm_mean = statistics.mean(rpm_vals)
+        rpm_sd = statistics.stdev(rpm_vals)
+
+        print(f"\n  {BOLD}RPM Stability:{RESET}")
+        print(f"    Mean: {rpm_mean:.0f} rpm, StdDev: {rpm_sd:.1f} rpm")
+
+        # Count "dip" events — RPM drops > 1 stdev below mean
+        dip_threshold = rpm_mean - rpm_sd * 1.5
+        dips = []
+        for i, v in enumerate(rpm_vals):
+            if v < dip_threshold:
+                dips.append((all_times[i] if i < len(all_times) else i, v))
+
+        if rpm_sd < 15:
+            print(f"    {GREEN}Very stable idle — {rpm_sd:.1f} rpm standard deviation{RESET}")
+        elif rpm_sd < 30:
+            print(f"    {YELLOW}Mild instability — {rpm_sd:.1f} rpm standard deviation{RESET}")
+        else:
+            print(f"    {RED}Unstable — {rpm_sd:.1f} rpm standard deviation{RESET}")
+
+        if dips:
+            print(f"    {YELLOW}{len(dips)} RPM dip(s) detected (below {dip_threshold:.0f} rpm):{RESET}")
+            for t, v in dips[:10]:
+                print(f"      t={t:.1f}s: {v:.0f} rpm (delta: {v - rpm_mean:+.0f})")
+            if len(dips) > 10:
+                print(f"      ... and {len(dips) - 10} more")
+
+    # --- Lambda Integrator Analysis ---
+    int_b1 = channel_data.get("IntB1", [])
+    int_b2 = channel_data.get("IntB2", [])
+    if len(int_b1) >= 10 and len(int_b2) >= 10:
+        print(f"\n  {BOLD}Lambda Integrator Analysis:{RESET}")
+        for label, vals in [("Bank 1", int_b1), ("Bank 2", int_b2)]:
+            avg = statistics.mean(vals)
+            sd = statistics.stdev(vals)
+            rng = max(vals) - min(vals)
+            # Count zero-crossings (sign changes around mean)
+            crossings = 0
+            for i in range(1, len(vals)):
+                if (vals[i] - avg) * (vals[i-1] - avg) < 0:
+                    crossings += 1
+            cross_rate = crossings / (len(vals) - 1) * 100  # % of samples
+
+            print(f"    {label}: mean {avg:+.1f}%, swing {rng:.1f}%, "
+                  f"stdev {sd:.2f}%, crossover {crossings}x ({cross_rate:.0f}%)")
+            if sd < 2.5:
+                print(f"      {GREEN}Normal closed-loop oscillation{RESET}")
+            elif sd < 5.0:
+                print(f"      {YELLOW}Elevated oscillation — DME working harder than typical{RESET}")
+            else:
+                print(f"      {RED}Large swings — active fuel control instability{RESET}")
+
+    # --- O2 Sensor Analysis ---
+    o2_b1 = channel_data.get("O2_B1", [])
+    o2_b2 = channel_data.get("O2_B2", [])
+    if len(o2_b1) >= 10 and len(o2_b2) >= 10:
+        sample_hz = sample_count / total_time if total_time > 0 else 0
+        nyquist_hz = sample_hz / 2
+        print(f"\n  {BOLD}O2 Sensor Analysis:{RESET}")
+        if nyquist_hz < 1.0:
+            print(f"    {DIM}NOTE: Sample rate ({sample_hz:.1f} Hz) is too slow to measure "
+                  f"true O2 switching frequency.{RESET}")
+            print(f"    {DIM}Nyquist limit: {nyquist_hz:.2f} Hz. "
+                  f"Healthy narrowband O2s switch at 1-2 Hz.{RESET}")
+            print(f"    {DIM}Frequency values below are under-sampled — "
+                  f"use distribution analysis instead.{RESET}")
+
+        for label, vals in [("Bank 1", o2_b1), ("Bank 2", o2_b2)]:
+            avg = statistics.mean(vals)
+            rng = max(vals) - min(vals)
+            low_count = sum(1 for v in vals if v < 0.2)
+            high_count = sum(1 for v in vals if v > 0.7)
+            mid_count = len(vals) - low_count - high_count
+            total = len(vals)
+            # Crossover count (0.45V threshold)
+            crossings = 0
+            for i in range(1, len(vals)):
+                if (vals[i] - 0.45) * (vals[i-1] - 0.45) < 0:
+                    crossings += 1
+            cross_hz = crossings / total_time if total_time > 0 else 0
+
+            print(f"    {label}: avg {avg:.3f}V, range {rng:.3f}V, "
+                  f"measured crossover {cross_hz:.2f} Hz")
+            print(f"      Lean(<0.2V): {low_count}/{total} ({low_count/total*100:.0f}%) | "
+                  f"Rich(>0.7V): {high_count}/{total} ({high_count/total*100:.0f}%) | "
+                  f"Mid: {mid_count}/{total} ({mid_count/total*100:.0f}%)")
+
+            # Distribution-based assessment (works regardless of sample rate)
+            if rng < 0.3:
+                print(f"      {RED}Sensor appears stuck — range only {rng:.3f}V{RESET}")
+            elif low_count + high_count > total * 0.6:
+                print(f"      {GREEN}Healthy distribution — "
+                      f"{(low_count+high_count)/total*100:.0f}% of time at extremes "
+                      f"(normal for narrowband){RESET}")
+            elif mid_count > total * 0.5:
+                print(f"      {YELLOW}Spending >50% in mid-range — "
+                      f"possible lazy sensor{RESET}")
+            else:
+                print(f"      {GREEN}Normal signal distribution{RESET}")
+
+    # --- Correlation: RPM dips vs integrator ---
+    if len(rpm_vals) >= 10 and len(int_b1) >= 10:
+        min_len = min(len(rpm_vals), len(int_b1), len(int_b2) if int_b2 else len(int_b1))
+        if min_len >= 10:
+            print(f"\n  {BOLD}Correlation (RPM vs Integrators):{RESET}")
+            # Simple: when RPM dips, what are the integrators doing?
+            rpm_trimmed = rpm_vals[:min_len]
+            int1_trimmed = int_b1[:min_len]
+            rpm_mean_t = statistics.mean(rpm_trimmed)
+            int1_mean_t = statistics.mean(int1_trimmed)
+            # Pearson-ish correlation
+            num = sum((r - rpm_mean_t) * (i - int1_mean_t)
+                      for r, i in zip(rpm_trimmed, int1_trimmed))
+            den_r = sum((r - rpm_mean_t)**2 for r in rpm_trimmed) ** 0.5
+            den_i = sum((i - int1_mean_t)**2 for i in int1_trimmed) ** 0.5
+            if den_r > 0 and den_i > 0:
+                corr = num / (den_r * den_i)
+                print(f"    RPM vs IntB1 correlation: {corr:+.3f}")
+                if abs(corr) > 0.5:
+                    print(f"    {YELLOW}Strong correlation — integrator is tracking RPM changes{RESET}")
+                    if corr > 0:
+                        print(f"    {DIM}(positive: RPM up = integrator up — normal feedback){RESET}")
+                    else:
+                        print(f"    {DIM}(negative: RPM up = integrator down — DME compensating){RESET}")
+                else:
+                    print(f"    {DIM}Weak correlation — integrator and RPM are somewhat independent{RESET}")
+
+    print()
+
+
 def cmd_reset_adapt(ecu, sgbd):
     """Reset DME adaptations (ADAPT_LOESCHEN)."""
     print_header("RESET DME ADAPTATIONS")
@@ -993,6 +1254,7 @@ def main():
 
 {BOLD}Actions:{RESET}
   --monitor [SECS]   Continuous idle monitoring (default 60s)
+  --record [SECS]    High-speed recording session (default 120s, auto-CSV)
   --clear-faults     Clear all fault codes (with confirmation)
   --reset-adapt      Reset DME adaptations (lambda, idle, knock)
   --jobs             List all available ECU jobs
@@ -1006,6 +1268,7 @@ def main():
   python bin/diag_m62.py --idle              # Full idle diagnostic
   python bin/diag_m62.py --monitor 120       # Watch the hunting in real time
   python bin/diag_m62.py --monitor 120 --csv idle_hunt.csv  # Log for analysis
+  python bin/diag_m62.py --record 120        # High-speed recording (auto-CSV)
         """,
     )
     parser.add_argument("--sgbd", default=None)
@@ -1017,6 +1280,7 @@ def main():
     parser.add_argument("--sensors", action="store_true")
     parser.add_argument("--faults", action="store_true")
     parser.add_argument("--monitor", nargs="?", const=60, type=int, metavar="SECS")
+    parser.add_argument("--record", nargs="?", const=120, type=int, metavar="SECS")
     parser.add_argument("--clear-faults", action="store_true")
     parser.add_argument("--reset-adapt", action="store_true")
     parser.add_argument("--jobs", action="store_true")
@@ -1026,6 +1290,7 @@ def main():
 
     specific = any([args.health, args.idle, args.trims, args.lambda_, args.roughness,
                      args.sensors, args.faults, args.monitor is not None,
+                     args.record is not None,
                      args.clear_faults, args.reset_adapt, args.jobs, args.job])
     full_report = not specific
 
@@ -1091,6 +1356,10 @@ def main():
 
         if args.monitor is not None:
             cmd_monitor(ecu, sgbd, args.monitor, csv_file=args.csv)
+            return
+
+        if args.record is not None:
+            cmd_record(ecu, sgbd, args.record, csv_file=args.csv)
             return
 
         if full_report:
