@@ -1,17 +1,18 @@
 {
-  "description": "Tuned baseline \u2014 known-good idle deviations",
-  "captured": "2026-03-08 17:54:21",
+  "description": "Interim baseline \u2014 gorilla tape charge air patches, new intake/MAF/turbo tube installed",
+  "captured": "2026-03-29 14:15:00",
   "sgbd": "D73N57C0",
   "mods": "Malone Stage 2 (EGR/DPF/DEF/swirl delete)",
+  "notes": "Previous baseline (-34.1%) was captured with car BROKEN (turbo intake popped off, CCV venting to free air, massive charge leaks). Current reading is the healthiest since repairs began. Proper charge air hoses not yet installed.",
   "conditions": {
-    "rpm": 2532.0,
-    "coolant_c": 55.8,
-    "samples": 5
+    "rpm": 702.0,
+    "coolant_c": 35.0,
+    "samples": 1
   },
-  "idle_air_deviation_pct": -9.8,
-  "idle_boost_deviation_pct": -17.8,
+  "idle_air_deviation_pct": -20.5,
+  "idle_boost_deviation_pct": -2.7,
   "thresholds": {
-    "air_mass_warn_pct": -17.8,
-    "air_mass_crit_pct": -24.8
+    "air_mass_warn_pct": -30.0,
+    "air_mass_crit_pct": -40.0
   }
 }
