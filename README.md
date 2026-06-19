@@ -130,7 +130,7 @@ injectors + faults + config).
 
 ## Requirements
 
-- Windows (EDIABAS is Windows-only)
+- Windows (EDIABAS is Windows-only) or Linux (Mono + pythonnet + ediabaslib)
 - Python 3.x (64-bit)
 - EDIABAS V7.3.0 installed at `C:\EDIABAS`
 - BimmerGeeks K+DCAN cable (or compatible FTDI-based cable)
@@ -152,6 +152,14 @@ python bin/diag.py --injectors  # Injector deep-dive
 python bin/diag.py --turbo      # Boost analysis
 python bin/diag.py --monitor 60 # Monitor for 60 seconds
 ```
+
+### Linux Quick Start
+
+1. `sudo apt install mono-complete && pip install pythonnet`
+2. Build [ediabaslib](https://github.com/uholeschak/ediabaslib) for net481, copy `EdiabasLib.dll` to `bimmerdiag/bin/`
+3. Connect cable, ignition on, run `python bin/diag.py --health`
+
+See [docs/SETUP.md](docs/SETUP.md#linux-setup) for full Linux setup.
 
 ## What makes this better than INPA
 
