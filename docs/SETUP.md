@@ -139,3 +139,63 @@ r
 q
 ```
 But it has the same 64-bit limitations and may return `API-0006: ACCESS DENIED`.
+
+---
+
+## Linux Setup
+
+On Linux, bimmerdiag uses [ediabaslib](https://github.com/uholeschak/ediabaslib)
+loaded in-process via [pythonnet](https://pythonnet.github.io/) + Mono as a
+replacement for the Windows-only EDIABAS DLLs.
+
+### Requirements
+
+- `sudo apt install mono-complete && pip install pythonnet`
+- [ediabaslib](https://github.com/uholeschak/ediabaslib) built for net481
+- BimmerGeeks K+DCAN cable (FTDI driver in kernel)
+
+### Setup
+
+1. **Build ediabaslib**
+
+   ```bash
+   git clone https://github.com/uholeschak/ediabaslib.git
+   cd ediabaslib/EdiabasLib/EdiabasLib
+   dotnet build -f net481 -c Release
+   ```
+
+2. **Install EdiabasLib.dll**
+
+   ```bash
+   cp bin/Release/net481/EdiabasLib.dll /path/to/bimmerdiag/bin/
+   ```
+
+3. **Get ECU files** — copy `.GRP`/`.PRG` from a Windows EDIABAS install
+   (`C:\EDIABAS\ECU\`) to your Linux machine. Pass the path via
+   `ediabas.connect(ecu_path="/path/to/ecu")`.
+
+4. **Serial port permissions**
+
+   ```bash
+   sudo usermod -aG dialout $USER   # log out and back in
+   ```
+
+5. **Run**
+
+   ```bash
+   python bin/diag.py --health
+   ```
+
+   The port defaults to `/dev/ttyUSB0`. Override with
+   `ediabas.connect(port="/dev/ttyUSB1")`.
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `ModuleNotFoundError: No module named 'clr'` | `pip install pythonnet` |
+| `FileNotFoundError: EdiabasLib.dll` | Build net481, copy to `bin/` |
+| Permission denied on `/dev/ttyUSB0` | `sudo usermod -aG dialout $USER` |
+| `IFH-0018: INITIALIZATION ERROR` | Check cable connected, correct port |
+| `SYS-0005: OBJECT FILE NOT FOUND` | Verify `ecu_path` points to ECU files |
+| Slow polling | Set FTDI latency: `echo 1 > /sys/bus/usb-serial/devices/ttyUSB0/latency_timer` |

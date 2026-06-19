@@ -5,17 +5,29 @@ Provides a clean interface to BMW's EDIABAS diagnostic system via the
 K+DCAN cable. Wraps the native C API with proper type handling for all
 EDIABAS result formats (REAL, INTEGER, WORD, LONG, DWORD, TEXT, BINARY).
 
+On Linux, uses pythonnet + Mono to load ediabaslib (uholeschak/ediabaslib)
+as an in-process replacement for api64.dll.
+
 Requirements:
     - EDIABAS V7.3.0 installed at C:\\EDIABAS
     - 64-bit Python 3.x
     - K+DCAN cable connected and configured (COM port in obd.ini)
     - C:\\Windows\\OBD.INI must exist (see docs/SETUP.md)
     - INPA must NOT be running (exclusive COM port access)
+
+  Linux:
+    - mono-complete, pip install pythonnet
+    - ediabaslib built for net481, EdiabasLib.dll in same directory
 """
 
 import ctypes
 import sys
 from pathlib import Path
+
+_LINUX = sys.platform == "linux"
+
+if _LINUX:
+    import clr  # pythonnet
 
 # EDIABAS API states
 APIBUSY = 0
@@ -37,6 +49,8 @@ APIFORMAT_REAL = 8
 # Default DLL path
 DEFAULT_API_DLL = r"C:\EDIABAS\Bin\api64.dll"
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+
 
 class EdiabasError(Exception):
     """EDIABAS API error with error code and message."""
@@ -46,18 +60,162 @@ class EdiabasError(Exception):
         super().__init__(f"EDIABAS error {code}: {message}")
 
 
+if _LINUX:
+
+    class _MonoBackend:
+        """Loads EdiabasLib.dll via pythonnet + Mono — in-process, no subprocess."""
+
+        _rt = None
+
+        def __init__(self, lib_path=None):
+            self._lib_path = Path(lib_path or (_SCRIPT_DIR / "EdiabasLib.dll"))
+            self._ediabas = None
+
+        def connect(self, port=None, ecu_path=None):
+            if self._ediabas is not None:
+                return
+
+            if not self._lib_path.exists():
+                raise FileNotFoundError(
+                    f"EdiabasLib.dll not found: {self._lib_path}\n"
+                    f"Build ediabaslib for net481: dotnet build -f net481 -c Release\n"
+                    f"Then copy EdiabasLib.dll to {_SCRIPT_DIR}/"
+                )
+
+            clr.AddReference(str(self._lib_path))
+            from EdiabasLib import EdiabasNet, EdInterfaceObd
+            _MonoBackend._rt = EdiabasNet.ResultType
+
+            port = port or "/dev/ttyUSB0"
+            overrides = f"Interface=STD:OBD;ObdComPort={port};RetryComm=1"
+            if ecu_path:
+                overrides += f";EcuPath={ecu_path}"
+
+            self._ediabas = EdiabasNet(overrides)
+            self._interface = EdInterfaceObd()
+            self._interface.IfhName = "STD:OBD"
+            self._interface.ComPort = port
+            self._ediabas.EdInterfaceClass = self._interface
+
+            if ecu_path:
+                self._ediabas.SetConfigProperty("EcuPath", ecu_path)
+
+            self._last_sgbd = None
+
+        def disconnect(self):
+            if self._ediabas is not None:
+                try:
+                    self._ediabas.Dispose()
+                except Exception:
+                    pass
+                self._ediabas = None
+
+        def _run(self, sgbd, job, args="", result_filter=""):
+            if self._ediabas is None:
+                raise EdiabasError(-1, "Not connected. Call connect() first.")
+
+            if self._last_sgbd != sgbd:
+                self._ediabas.ResolveSgbdFile(sgbd)
+                self._last_sgbd = sgbd
+
+            self._ediabas.ArgString = args
+            self._ediabas.ResultsRequests = result_filter
+
+            try:
+                self._ediabas.ExecuteJob(job)
+            except Exception as e:
+                raise EdiabasError(-1, str(e)) from e
+
+            return self._convert()
+
+        def _convert(self):
+            net_sets = self._ediabas.ResultSets
+            if net_sets is None:
+                return []
+
+            rt = _MonoBackend._rt
+            py_sets = []
+            for result_set in net_sets:
+                item_dict = {}
+                for name in result_set.Keys:
+                    if name.startswith("_TEL_"):
+                        continue
+                    rd = result_set[name]
+                    rtype = rd.ResType
+                    opdata = rd.OpData
+
+                    if rtype in (rt.TypeS, rt.TypeC):
+                        value = str(opdata) if opdata is not None else ""
+                    elif rtype == rt.TypeR:
+                        value = float(opdata) if opdata is not None else 0.0
+                    elif rtype == rt.TypeY:
+                        value = str(opdata) if opdata is not None else ""
+                    else:
+                        value = int(opdata) if opdata is not None else 0
+
+                    item_dict[name] = value
+                py_sets.append(item_dict)
+            return py_sets
+
+        def run_job(self, sgbd, job, params="", result_filter="", timeout_ms=10000):
+            return self._run(sgbd, job, params, result_filter)
+
+        def read_value(self, sgbd, job, result_name, result_set=1, params=""):
+            sets = self._run(sgbd, job, params)
+            if len(sets) > result_set:
+                return sets[result_set].get(result_name)
+            return None
+
+        def read_results(self, sgbd, job, result_names, params="", result_set=1,
+                         timeout_ms=10000):
+            sets = self._run(sgbd, job, params)
+            if len(sets) > result_set:
+                return {name: sets[result_set].get(name) for name in result_names}
+            return {name: None for name in result_names}
+
+        def list_jobs(self, sgbd):
+            sets = self._run(sgbd, "_JOBS")
+            jobs = []
+            for s in sets[1:]:
+                if "JOBNAME" in s:
+                    jobs.append(s["JOBNAME"])
+            return sorted(jobs)
+
+        def identify(self, sgbd):
+            sets = self._run(sgbd, "IDENT")
+            return sets[1] if len(sets) > 1 else {}
+
+        def read_faults(self, sgbd):
+            sets = self._run(sgbd, "FS_LESEN")
+            faults = []
+            for r in sets[1:]:
+                if "F_ORT_NR" in r:
+                    faults.append(r)
+                elif "JOB_STATUS" in r and r["JOB_STATUS"] == "OKAY":
+                    continue
+            return faults
+
+
 class Ediabas:
     """Wrapper for the EDIABAS API."""
 
     def __init__(self, dll_path=DEFAULT_API_DLL):
+        if _LINUX:
+            self._backend = _MonoBackend()
+            self._connected = False
+            return
         self.dll_path = dll_path
         self.api = None
         self.handle = ctypes.c_uint(0)
         self._connected = False
 
-    def connect(self):
+    def connect(self, port=None, ecu_path=None):
         """Initialize the EDIABAS API connection."""
         if self._connected:
+            return
+        if _LINUX:
+            self._backend.connect(port=port, ecu_path=ecu_path)
+            self._connected = True
             return
 
         if not Path(self.dll_path).exists():
@@ -74,6 +232,12 @@ class Ediabas:
 
     def disconnect(self):
         """Close the EDIABAS API connection."""
+        if _LINUX:
+            if self._connected:
+                self._backend.disconnect()
+                self._connected = False
+            return
+
         if self._connected and self.api:
             self._apiEnd(self.handle)
             self._connected = False
@@ -190,6 +354,8 @@ class Ediabas:
 
     def get_error(self):
         """Get the current error code and text."""
+        if _LINUX:
+            return (-1, "use EdiabasError.message for backend errors")
         code = self._apiErrorCode(self.handle)
         buf = ctypes.create_string_buffer(256)
         self._apiErrorText(self.handle, buf, 256)
@@ -202,6 +368,9 @@ class Ediabas:
         Each dict maps result_name -> value (auto-typed).
         Raises EdiabasError on failure.
         """
+        if _LINUX:
+            return self._backend.run_job(sgbd, job, params, result_filter, timeout_ms)
+
         self._apiJob(self.handle, sgbd.encode(), job.encode(),
                      params.encode(), result_filter.encode())
 
@@ -306,6 +475,9 @@ class Ediabas:
         Convenience method for reading sensor values.
         Returns the value or None if not found.
         """
+        if _LINUX:
+            return self._backend.read_value(sgbd, job, result_name, result_set, params)
+
         self._apiJob(self.handle, sgbd.encode(), job.encode(),
                      params.encode(), b"")
         for _ in range(100):
@@ -349,6 +521,10 @@ class Ediabas:
         More efficient than calling read_value() multiple times when all
         results come from the same job. Returns dict of {name: value}.
         """
+        if _LINUX:
+            return self._backend.read_results(sgbd, job, result_names, params,
+                                              result_set, timeout_ms)
+
         self._apiJob(self.handle, sgbd.encode(), job.encode(),
                      params.encode(), b"")
 
@@ -399,6 +575,9 @@ class Ediabas:
 
     def list_jobs(self, sgbd):
         """List all available jobs for a given SGBD."""
+        if _LINUX:
+            return self._backend.list_jobs(sgbd)
+
         self._apiJob(self.handle, sgbd.encode(), b"_JOBS", b"", b"")
 
         for _ in range(100):
@@ -417,11 +596,15 @@ class Ediabas:
 
     def identify(self, sgbd):
         """Run IDENT job and return identification data."""
+        if _LINUX:
+            return self._backend.identify(sgbd)
         results = self.run_job(sgbd, "IDENT")
         return results[1] if len(results) > 1 else {}
 
     def read_faults(self, sgbd):
         """Read fault codes (DTC). Returns list of fault dicts."""
+        if _LINUX:
+            return self._backend.read_faults(sgbd)
         results = self.run_job(sgbd, "FS_LESEN")
         faults = []
         for r in results[1:]:  # skip set 0
