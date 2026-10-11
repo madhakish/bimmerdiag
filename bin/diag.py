@@ -261,7 +261,7 @@ def format_value(val, unit):
         volts = val / 1000
         return f"{volts:.2f} V"
     elif unit == "hPa":
-        bar = val / 1013.25
+        bar = val / 1000
         return f"{val:.0f} hPa ({bar:.2f} bar)"
     elif unit == "km":
         mi = val * 0.621371
