@@ -206,3 +206,29 @@ docs/
 | `SYS-0005: OBJECT FILE NOT FOUND` | Wrong SGBD name | Use `--sgbd D73N57B0` or auto-detect |
 | `IFH-0018` with script but INPA works | INPA holding COM port | Close INPA first |
 | All sensor values = 0 | Ignition off or engine not running | Turn key to pos 2 / start engine |
+
+
+## Offline development and safety
+
+The commands above are live-vehicle operations, not development smoke tests.
+In particular, arbitrary `--job` calls, fault clearing, injector resets and
+transmission resets can change ECU state. No-argument CLI execution also
+connects to the vehicle. Keep development and CI disconnected from hardware.
+
+From the repository root, Python's standard library is enough for the synthetic
+sensor-read regression suite:
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+The fail-closed fixture helper rejects unknown reads and all job execution;
+no DLL, serial port, Mono or pythonnet is loaded. Passing these tests proves
+only host-side behavior, not vehicle compatibility or mechanical safety.
+See [AGENTS.md](AGENTS.md) and the
+[offline fixture skill](.agents/skills/bimmerdiag-offline/SKILL.md).
+
+Existing example output is illustrative, not a calibration reference. Baseline
+thresholds are vehicle-specific; missing readings are not measured zeros.
+Before changing setup or pressure display, reconcile the open platform and
+formatting PRs rather than treating proposed behavior as shipped support.
